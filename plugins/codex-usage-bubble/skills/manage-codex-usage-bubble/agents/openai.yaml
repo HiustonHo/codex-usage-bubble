@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Codex Usage Bubble"
+  short_description: "Install and manage the Windows usage bubble"
+  default_prompt: "Install or manage my Codex weekly usage bubble."

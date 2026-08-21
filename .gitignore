@@ -1,0 +1,5 @@
+*.status.json
+*.pdb
+*.tmp
+.venv/
+.validator_deps/
