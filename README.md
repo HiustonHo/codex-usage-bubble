@@ -2,6 +2,8 @@
 
 A Windows desktop overlay that shows the signed-in user's remaining seven-day Codex usage.
 
+![Codex Usage Bubble sample](docs/codex-usage-bubble.png)
+
 The bubble is always on top, draggable, refreshed every minute, and launched silently at Windows sign-in. Its water level follows the remaining percentage, while its color blends continuously from green through amber to red. Click it to refresh immediately or right-click it to refresh or exit.
 
 ## Install as a Codex plugin

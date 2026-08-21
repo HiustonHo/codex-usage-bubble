@@ -257,6 +257,34 @@ namespace CodexUsageBubble
             base.OnFormClosed(e);
         }
 
+        internal void RenderSample(string outputPath)
+        {
+            snapshot = new UsageSnapshot
+            {
+                Available = true,
+                RemainingPercent = 86,
+                RemainingDays = 6,
+                ResetAt = new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero),
+                UpdatedAt = DateTimeOffset.Now,
+                Error = null
+            };
+
+            string outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
+            using (Bitmap bitmap = new Bitmap(ClientSize.Width, ClientSize.Height))
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.Clear(TransparencyKey);
+                OnPaint(new PaintEventArgs(graphics, ClientRectangle));
+                bitmap.MakeTransparent(TransparencyKey);
+                bitmap.Save(outputPath, System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+
         private void ApplyRoundedRegion()
         {
             Region = new Region(ClientRectangle);
@@ -620,6 +648,18 @@ namespace CodexUsageBubble
         [STAThread]
         private static void Main()
         {
+            string[] arguments = Environment.GetCommandLineArgs();
+            if (arguments.Length == 3 && string.Equals(arguments[1], "--render-sample", StringComparison.OrdinalIgnoreCase))
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (UsageBubbleForm previewForm = new UsageBubbleForm())
+                {
+                    previewForm.RenderSample(arguments[2]);
+                }
+                return;
+            }
+
             bool createdNew;
             using (System.Threading.Mutex singleton = new System.Threading.Mutex(true, "Local\\CodexUsageBubble.Singleton", out createdNew))
             {
