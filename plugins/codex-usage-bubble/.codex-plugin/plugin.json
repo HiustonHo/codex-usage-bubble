@@ -1,12 +1,18 @@
 {
   "name": "codex-usage-bubble",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260824003917",
   "description": "A draggable, always-on-top Windows bubble for live Codex weekly usage.",
   "author": {
     "name": "Codex Usage Bubble Contributors"
   },
   "license": "MIT",
-  "keywords": ["codex", "usage", "windows", "desktop", "productivity"],
+  "keywords": [
+    "codex",
+    "usage",
+    "windows",
+    "desktop",
+    "productivity"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Usage Bubble",
@@ -14,7 +20,10 @@
     "longDescription": "Install and manage a draggable, always-on-top Windows bubble that reads the signed-in Codex weekly usage window locally, lowers its water level as usage runs out, blends from green through amber to red, and refreshes automatically.",
     "developerName": "Codex Usage Bubble Contributors",
     "category": "Productivity",
-    "capabilities": ["Windows desktop utility", "Local usage status"],
+    "capabilities": [
+      "Windows desktop utility",
+      "Local usage status"
+    ],
     "defaultPrompt": [
       "Install my Codex usage bubble.",
       "Check whether my usage bubble is running.",

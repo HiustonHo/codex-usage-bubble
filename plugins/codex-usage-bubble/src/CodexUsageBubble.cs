@@ -45,7 +45,7 @@ namespace CodexUsageBubble
             ClientSize = new Size(196, 246);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
-            ShowInTaskbar = true;
+            ShowInTaskbar = false;
             TopMost = true;
             BackColor = Color.FromArgb(1, 1, 1);
             TransparencyKey = Color.FromArgb(1, 1, 1);
@@ -539,6 +539,31 @@ namespace CodexUsageBubble
                 return configuredPath;
             }
 
+            string codexInstallRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpenAI",
+                "Codex",
+                "bin"
+            );
+            if (Directory.Exists(codexInstallRoot))
+            {
+                string[] installedCandidates = Directory.GetDirectories(codexInstallRoot)
+                    .Select(directory => Path.Combine(directory, "codex.exe"))
+                    .Where(File.Exists)
+                    .OrderByDescending(File.GetLastWriteTimeUtc)
+                    .ToArray();
+                if (installedCandidates.Length > 0)
+                {
+                    return installedCandidates[0];
+                }
+
+                string stableCandidate = Path.Combine(codexInstallRoot, "codex.exe");
+                if (File.Exists(stableCandidate))
+                {
+                    return stableCandidate;
+                }
+            }
+
             string pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
             foreach (string directory in pathValue.Split(Path.PathSeparator))
             {
@@ -623,6 +648,7 @@ namespace CodexUsageBubble
                     { "windowHandle", Handle.ToInt64() },
                     { "windowTitle", Text },
                     { "isVisible", Visible },
+                    { "showInTaskbar", ShowInTaskbar },
                     { "topmost", TopMost },
                     { "left", Left },
                     { "top", Top },
