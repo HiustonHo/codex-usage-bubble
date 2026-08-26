@@ -1,10 +1,12 @@
 # Codex Usage Bubble
 
-A Windows desktop overlay that shows the signed-in user's remaining seven-day Codex usage.
+A Windows desktop overlay that shows the signed-in user's remaining five-hour and seven-day Codex usage.
 
 ![Codex Usage Bubble sample](docs/codex-usage-bubble.png)
 
-The bubble is always on top, draggable, refreshed every minute, and launched silently at Windows sign-in. Its water level follows the remaining percentage, while its color blends continuously from green through amber to red. Click it to refresh immediately or right-click it to refresh or exit.
+The bubble is always on top, draggable, refreshed every minute, and launched silently at Windows sign-in. It starts on whichever window has less usage remaining; click the bubble to switch between 5-hour and weekly usage. Its water level follows the selected percentage, while its color blends continuously from green through amber to red. Both windows and their reset times remain visible in the lower panel.
+
+Right-click the bubble to refresh, hide it to the Windows system tray, or exit. Left-click the tray icon to show or hide the bubble. The app stays out of the Windows taskbar.
 
 ## Install as a Codex plugin
 
@@ -38,7 +40,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\plugins\codex-usage-bu
 
 ## Privacy
 
-The utility starts the local `codex app-server` process and reads the account rate-limit response. It does not operate a separate server or send usage data to the repository publisher.
+The utility starts the local `codex app-server` process and reads the account rate-limit response. It does not operate a separate server, require an API key, or send usage data to the repository publisher.
 
 ## License
 

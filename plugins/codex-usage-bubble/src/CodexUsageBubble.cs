@@ -13,22 +13,38 @@ using System.Windows.Forms;
 
 namespace CodexUsageBubble
 {
-    internal sealed class UsageSnapshot
+    internal sealed class UsageWindowSnapshot
     {
         public bool Available;
         public int RemainingPercent;
         public int RemainingDays;
         public DateTimeOffset ResetAt;
+    }
+
+    internal sealed class UsageSnapshot
+    {
+        public UsageWindowSnapshot FiveHour = new UsageWindowSnapshot();
+        public UsageWindowSnapshot Weekly = new UsageWindowSnapshot();
         public DateTimeOffset UpdatedAt;
         public string Error;
+    }
+
+    internal enum UsageWindowKind
+    {
+        FiveHour,
+        Weekly
     }
 
     internal sealed class UsageBubbleForm : Form
     {
         private readonly Timer refreshTimer;
         private readonly string statusPath;
+        private readonly NotifyIcon trayIcon;
         private UsageSnapshot snapshot;
+        private UsageWindowKind selectedWindow;
+        private bool selectionInitialized;
         private bool refreshRunning;
+        private Icon trayIconImage;
 
         private const int WmNcLeftButtonDown = 0x00A1;
         private const int HtCaption = 0x0002;
@@ -39,10 +55,13 @@ namespace CodexUsageBubble
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr windowHandle, int message, IntPtr wParam, IntPtr lParam);
 
-        public UsageBubbleForm()
+        [DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr iconHandle);
+
+        public UsageBubbleForm(bool enableTrayIcon = true)
         {
-            Text = "Codex Weekly Usage";
-            ClientSize = new Size(196, 246);
+            Text = "Codex Usage";
+            ClientSize = new Size(196, 292);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
@@ -59,24 +78,57 @@ namespace CodexUsageBubble
             statusPath = Path.Combine(executableDirectory, "codex-weekly-usage-bubble.status.json");
             snapshot = new UsageSnapshot
             {
-                Available = false,
                 UpdatedAt = DateTimeOffset.Now,
                 Error = "Loading current usage"
             };
+            selectedWindow = UsageWindowKind.FiveHour;
 
             ContextMenuStrip menu = new ContextMenuStrip();
             ToolStripMenuItem refreshItem = new ToolStripMenuItem("Refresh now");
             refreshItem.Click += async delegate { await RefreshUsageAsync(); };
+            ToolStripMenuItem hideItem = new ToolStripMenuItem("Hide to tray");
+            hideItem.Click += delegate { HideToTray(); };
             ToolStripMenuItem exitItem = new ToolStripMenuItem("Exit usage bubble");
-            exitItem.Click += delegate { Close(); };
+            exitItem.Click += delegate { ExitApplication(); };
             menu.Items.Add(refreshItem);
+            menu.Items.Add(hideItem);
             menu.Items.Add(exitItem);
             ContextMenuStrip = menu;
 
-            ToolTip tip = new ToolTip();
-            tip.SetToolTip(this, "Weekly Codex usage. Click to refresh; right-click to exit.");
+            if (enableTrayIcon)
+            {
+                ContextMenuStrip trayMenu = new ContextMenuStrip();
+                ToolStripMenuItem showHideItem = new ToolStripMenuItem("Show / Hide bubble");
+                showHideItem.Click += delegate { ToggleBubbleVisibility(); };
+                ToolStripMenuItem trayRefreshItem = new ToolStripMenuItem("Refresh now");
+                trayRefreshItem.Click += async delegate { await RefreshUsageAsync(); };
+                ToolStripMenuItem trayExitItem = new ToolStripMenuItem("Exit");
+                trayExitItem.Click += delegate { ExitApplication(); };
+                trayMenu.Items.Add(showHideItem);
+                trayMenu.Items.Add(trayRefreshItem);
+                trayMenu.Items.Add(new ToolStripSeparator());
+                trayMenu.Items.Add(trayExitItem);
 
-            MouseDown += async delegate(object sender, MouseEventArgs e)
+                trayIcon = new NotifyIcon
+                {
+                    ContextMenuStrip = trayMenu,
+                    Text = "Codex usage bubble",
+                    Visible = true
+                };
+                trayIcon.MouseClick += delegate(object sender, MouseEventArgs e)
+                {
+                    if (e.Button == MouseButtons.Left)
+                    {
+                        ToggleBubbleVisibility();
+                    }
+                };
+                UpdateTrayPresentation();
+            }
+
+            ToolTip tip = new ToolTip();
+            tip.SetToolTip(this, "Click to switch 5-hour and weekly usage. Right-click for more options.");
+
+            MouseDown += delegate(object sender, MouseEventArgs e)
             {
                 if (e.Button == MouseButtons.Left)
                 {
@@ -89,7 +141,7 @@ namespace CodexUsageBubble
                     }
                     else
                     {
-                        await RefreshUsageAsync();
+                        ToggleSelectedWindow();
                     }
                 }
             };
@@ -114,27 +166,49 @@ namespace CodexUsageBubble
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             graphics.Clear(TransparencyKey);
 
+            UsageWindowSnapshot activeWindow = GetSelectedUsageWindow();
             int percent = 0;
             string percentText = "…";
-            string weeklyText = "WEEKLY LEFT";
-            string daysText = "Loading";
-            string resetText = "Please wait";
+            string activeWindowText = selectedWindow == UsageWindowKind.FiveHour ? "5-HOUR LEFT" : "WEEKLY LEFT";
+            string fiveHourValueText = "5H …";
+            string fiveHourResetText = "Loading";
+            string weeklyValueText = "WEEK …";
+            string weeklyResetText = "Loading";
 
-            if (snapshot.Available)
+            if (activeWindow.Available)
             {
-                percent = snapshot.RemainingPercent;
+                percent = activeWindow.RemainingPercent;
                 percentText = string.Format(CultureInfo.InvariantCulture, "{0}%", percent);
-                daysText = snapshot.RemainingDays == 1
-                    ? "1 day left"
-                    : string.Format(CultureInfo.InvariantCulture, "{0} days left", snapshot.RemainingDays);
-                resetText = "Reset " + snapshot.ResetAt.ToString("MMM d", CultureInfo.InvariantCulture);
             }
             else if (!string.Equals(snapshot.Error, "Loading current usage", StringComparison.Ordinal))
             {
                 percentText = "—";
-                weeklyText = "UNAVAILABLE";
-                daysText = "Click to retry";
-                resetText = "Usage not read";
+                activeWindowText = "UNAVAILABLE";
+            }
+
+            if (snapshot.FiveHour.Available)
+            {
+                fiveHourValueText = string.Format(CultureInfo.InvariantCulture, "5H {0}%", snapshot.FiveHour.RemainingPercent);
+                fiveHourResetText = "Reset " + snapshot.FiveHour.ResetAt.ToString("h:mm tt", CultureInfo.InvariantCulture);
+            }
+            else if (!string.Equals(snapshot.Error, "Loading current usage", StringComparison.Ordinal))
+            {
+                fiveHourValueText = "5H —";
+                fiveHourResetText = "Unavailable";
+            }
+
+            if (snapshot.Weekly.Available)
+            {
+                weeklyValueText = string.Format(CultureInfo.InvariantCulture, "WEEK {0}%", snapshot.Weekly.RemainingPercent);
+                string daysText = snapshot.Weekly.RemainingDays == 1
+                    ? "1 day left"
+                    : string.Format(CultureInfo.InvariantCulture, "{0} days left", snapshot.Weekly.RemainingDays);
+                weeklyResetText = daysText + " · Reset " + snapshot.Weekly.ResetAt.ToString("MMM d", CultureInfo.InvariantCulture);
+            }
+            else if (!string.Equals(snapshot.Error, "Loading current usage", StringComparison.Ordinal))
+            {
+                weeklyValueText = "WEEK —";
+                weeklyResetText = "Unavailable";
             }
 
             RectangleF shadowBounds = new RectangleF(28f, 166f, 140f, 20f);
@@ -163,9 +237,9 @@ namespace CodexUsageBubble
                     graphics.FillPath(emptySphereBrush, spherePath);
                 }
 
-                float fillRatio = snapshot.Available ? Math.Max(0f, Math.Min(1f, percent / 100f)) : 0.65f;
+                float fillRatio = activeWindow.Available ? Math.Max(0f, Math.Min(1f, percent / 100f)) : 0.65f;
                 float waterTop = sphereBounds.Bottom - (sphereBounds.Height * fillRatio);
-                Color usageTone = snapshot.Available ? GetUsageTone(percent) : Color.FromArgb(0, 184, 137);
+                Color usageTone = activeWindow.Available ? GetUsageTone(percent) : Color.FromArgb(0, 184, 137);
                 Color liquidTop = BlendColor(usageTone, Color.White, 0.28f);
                 Color liquidBottom = BlendColor(usageTone, Color.Black, 0.34f);
 
@@ -220,7 +294,7 @@ namespace CodexUsageBubble
                 graphics.DrawString(percentText, percentFont, whiteBrush, new RectangleF(17f, 54f, 162f, 72f), centered);
                 TextRenderer.DrawText(
                     graphics,
-                    weeklyText,
+                    activeWindowText,
                     weeklyFont,
                     new Rectangle(17, 121, 162, 27),
                     Color.White,
@@ -228,7 +302,7 @@ namespace CodexUsageBubble
                 );
             }
 
-            Rectangle labelBounds = new Rectangle(14, 185, 168, 58);
+            Rectangle labelBounds = new Rectangle(14, 185, 168, 104);
             using (GraphicsPath labelPath = CreateRoundedRectanglePath(labelBounds, 20))
             using (LinearGradientBrush labelBrush = new LinearGradientBrush(
                 labelBounds,
@@ -241,12 +315,21 @@ namespace CodexUsageBubble
                 graphics.DrawPath(labelBorder, labelPath);
             }
 
-            using (Font infoFont = new Font("Segoe UI", 15.5f, FontStyle.Bold, GraphicsUnit.Point))
+            using (Pen dividerPen = new Pen(Color.FromArgb(35, 29, 51, 49), 1f))
+            {
+                graphics.DrawLine(dividerPen, 29f, 237f, 167f, 237f);
+            }
+
+            using (Font valueFont = new Font("Segoe UI", 13.5f, FontStyle.Bold, GraphicsUnit.Point))
+            using (Font detailFont = new Font("Segoe UI", 10.8f, FontStyle.Bold, GraphicsUnit.Point))
+            using (Font weeklyDetailFont = new Font("Segoe UI", 9.8f, FontStyle.Bold, GraphicsUnit.Point))
             using (Brush infoBrush = new SolidBrush(Color.FromArgb(29, 51, 49)))
             using (StringFormat centered = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             {
-                graphics.DrawString(daysText, infoFont, infoBrush, new RectangleF(16f, 188f, 164f, 27f), centered);
-                graphics.DrawString(resetText, infoFont, infoBrush, new RectangleF(16f, 214f, 164f, 27f), centered);
+                graphics.DrawString(fiveHourValueText, valueFont, infoBrush, new RectangleF(16f, 188f, 164f, 25f), centered);
+                graphics.DrawString(fiveHourResetText, detailFont, infoBrush, new RectangleF(16f, 211f, 164f, 23f), centered);
+                graphics.DrawString(weeklyValueText, valueFont, infoBrush, new RectangleF(16f, 240f, 164f, 25f), centered);
+                graphics.DrawString(weeklyResetText, weeklyDetailFont, infoBrush, new RectangleF(16f, 263f, 164f, 23f), centered);
             }
         }
 
@@ -254,6 +337,16 @@ namespace CodexUsageBubble
         {
             refreshTimer.Stop();
             refreshTimer.Dispose();
+            if (trayIcon != null)
+            {
+                trayIcon.Visible = false;
+                trayIcon.Dispose();
+            }
+            if (trayIconImage != null)
+            {
+                trayIconImage.Dispose();
+                trayIconImage = null;
+            }
             base.OnFormClosed(e);
         }
 
@@ -261,13 +354,24 @@ namespace CodexUsageBubble
         {
             snapshot = new UsageSnapshot
             {
-                Available = true,
-                RemainingPercent = 86,
-                RemainingDays = 6,
-                ResetAt = new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero),
+                FiveHour = new UsageWindowSnapshot
+                {
+                    Available = true,
+                    RemainingPercent = 57,
+                    ResetAt = new DateTimeOffset(2026, 8, 26, 17, 32, 0, TimeSpan.FromHours(8))
+                },
+                Weekly = new UsageWindowSnapshot
+                {
+                    Available = true,
+                    RemainingPercent = 87,
+                    RemainingDays = 7,
+                    ResetAt = new DateTimeOffset(2026, 9, 2, 8, 16, 0, TimeSpan.FromHours(8))
+                },
                 UpdatedAt = DateTimeOffset.Now,
                 Error = null
             };
+            selectedWindow = UsageWindowKind.FiveHour;
+            selectionInitialized = true;
 
             string outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
             if (!string.IsNullOrWhiteSpace(outputDirectory))
@@ -329,6 +433,162 @@ namespace CodexUsageBubble
             );
         }
 
+        private UsageWindowSnapshot GetSelectedUsageWindow()
+        {
+            return selectedWindow == UsageWindowKind.FiveHour ? snapshot.FiveHour : snapshot.Weekly;
+        }
+
+        private void ToggleSelectedWindow()
+        {
+            if (!snapshot.FiveHour.Available || !snapshot.Weekly.Available)
+            {
+                return;
+            }
+
+            selectedWindow = selectedWindow == UsageWindowKind.FiveHour
+                ? UsageWindowKind.Weekly
+                : UsageWindowKind.FiveHour;
+            selectionInitialized = true;
+            UpdateTrayPresentation();
+            Invalidate();
+            SaveStatus();
+        }
+
+        private void SelectInitialWindow()
+        {
+            if (snapshot.FiveHour.Available && snapshot.Weekly.Available)
+            {
+                selectedWindow = snapshot.FiveHour.RemainingPercent <= snapshot.Weekly.RemainingPercent
+                    ? UsageWindowKind.FiveHour
+                    : UsageWindowKind.Weekly;
+            }
+            else if (snapshot.FiveHour.Available)
+            {
+                selectedWindow = UsageWindowKind.FiveHour;
+            }
+            else if (snapshot.Weekly.Available)
+            {
+                selectedWindow = UsageWindowKind.Weekly;
+            }
+            selectionInitialized = snapshot.FiveHour.Available || snapshot.Weekly.Available;
+        }
+
+        private void EnsureSelectedWindowAvailable()
+        {
+            if (!selectionInitialized)
+            {
+                SelectInitialWindow();
+                return;
+            }
+
+            if (selectedWindow == UsageWindowKind.FiveHour && !snapshot.FiveHour.Available && snapshot.Weekly.Available)
+            {
+                selectedWindow = UsageWindowKind.Weekly;
+            }
+            else if (selectedWindow == UsageWindowKind.Weekly && !snapshot.Weekly.Available && snapshot.FiveHour.Available)
+            {
+                selectedWindow = UsageWindowKind.FiveHour;
+            }
+        }
+
+        private void HideToTray()
+        {
+            Hide();
+            SaveStatus();
+        }
+
+        private void ShowFromTray()
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            BringToFront();
+            Activate();
+            SaveStatus();
+        }
+
+        private void ToggleBubbleVisibility()
+        {
+            if (Visible)
+            {
+                HideToTray();
+            }
+            else
+            {
+                ShowFromTray();
+            }
+        }
+
+        private void ExitApplication()
+        {
+            Close();
+        }
+
+        private void UpdateTrayPresentation()
+        {
+            if (trayIcon == null)
+            {
+                return;
+            }
+
+            string fiveHourText = snapshot.FiveHour.Available
+                ? string.Format(CultureInfo.InvariantCulture, "5H {0}%", snapshot.FiveHour.RemainingPercent)
+                : "5H unavailable";
+            string weeklyText = snapshot.Weekly.Available
+                ? string.Format(CultureInfo.InvariantCulture, "Week {0}%", snapshot.Weekly.RemainingPercent)
+                : "Week unavailable";
+            trayIcon.Text = "Codex: " + fiveHourText + ", " + weeklyText;
+
+            UsageWindowSnapshot activeWindow = GetSelectedUsageWindow();
+            Color tone = activeWindow.Available
+                ? GetUsageTone(activeWindow.RemainingPercent)
+                : Color.FromArgb(0, 184, 137);
+            Icon newIcon = CreateTrayIcon(tone);
+            Icon previousIcon = trayIconImage;
+            trayIconImage = newIcon;
+            trayIcon.Icon = newIcon;
+            if (previousIcon != null)
+            {
+                previousIcon.Dispose();
+            }
+        }
+
+        private static Icon CreateTrayIcon(Color tone)
+        {
+            using (Bitmap bitmap = new Bitmap(32, 32))
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                graphics.Clear(Color.Transparent);
+                Rectangle bounds = new Rectangle(3, 3, 26, 26);
+                using (LinearGradientBrush brush = new LinearGradientBrush(
+                    bounds,
+                    BlendColor(tone, Color.White, 0.45f),
+                    BlendColor(tone, Color.Black, 0.28f),
+                    LinearGradientMode.Vertical))
+                {
+                    graphics.FillEllipse(brush, bounds);
+                }
+                using (Pen rim = new Pen(BlendColor(tone, Color.White, 0.72f), 2f))
+                {
+                    graphics.DrawEllipse(rim, bounds);
+                }
+                using (SolidBrush highlight = new SolidBrush(Color.FromArgb(180, 255, 255, 255)))
+                {
+                    graphics.FillEllipse(highlight, new Rectangle(8, 7, 13, 7));
+                }
+
+                IntPtr iconHandle = bitmap.GetHicon();
+                try
+                {
+                    return (Icon)Icon.FromHandle(iconHandle).Clone();
+                }
+                finally
+                {
+                    DestroyIcon(iconHandle);
+                }
+            }
+        }
+
         private async Task RefreshUsageAsync()
         {
             if (refreshRunning)
@@ -339,7 +599,9 @@ namespace CodexUsageBubble
             refreshRunning = true;
             try
             {
-                snapshot = await Task.Run(new Func<UsageSnapshot>(ReadWeeklyUsage));
+                snapshot = await Task.Run(new Func<UsageSnapshot>(ReadUsage));
+                EnsureSelectedWindowAvailable();
+                UpdateTrayPresentation();
                 Invalidate();
                 SaveStatus();
             }
@@ -349,7 +611,7 @@ namespace CodexUsageBubble
             }
         }
 
-        private static UsageSnapshot ReadWeeklyUsage()
+        private static UsageSnapshot ReadUsage()
         {
             Process process = null;
             try
@@ -383,8 +645,8 @@ namespace CodexUsageBubble
                             { "clientInfo", new Dictionary<string, object>
                                 {
                                     { "name", "codex_usage_bubble" },
-                                    { "title", "Codex Weekly Usage Bubble" },
-                                    { "version", "1.0.0" }
+                                    { "title", "Codex Usage Bubble" },
+                                    { "version", "1.1.0" }
                                 }
                             }
                         }
@@ -460,54 +722,12 @@ namespace CodexUsageBubble
                     bucket = GetDictionary(resultDictionary, "rateLimits");
                 }
 
-                Dictionary<string, object> weekly = null;
-                foreach (string key in new[] { "primary", "secondary" })
-                {
-                    object windowObject;
-                    if (!bucket.TryGetValue(key, out windowObject) || windowObject == null)
-                    {
-                        continue;
-                    }
-                    Dictionary<string, object> window = windowObject as Dictionary<string, object>;
-                    if (window == null)
-                    {
-                        continue;
-                    }
-                    object minutesObject;
-                    if (window.TryGetValue("windowDurationMins", out minutesObject)
-                        && Math.Abs(Convert.ToDouble(minutesObject, CultureInfo.InvariantCulture) - 10080d) <= 1d)
-                    {
-                        weekly = window;
-                        break;
-                    }
-                }
-
-                if (weekly == null)
-                {
-                    throw new InvalidOperationException("The account did not return a seven-day usage window.");
-                }
-
-                double usedPercent = Convert.ToDouble(weekly["usedPercent"], CultureInfo.InvariantCulture);
-                int remainingPercent = (int)Math.Max(0d, Math.Min(100d, Math.Round(100d - usedPercent)));
-                long resetsAt = Convert.ToInt64(weekly["resetsAt"], CultureInfo.InvariantCulture);
-                DateTimeOffset resetTime = DateTimeOffset.FromUnixTimeSeconds(resetsAt).ToLocalTime();
-                int remainingDays = (int)Math.Max(0d, Math.Ceiling((resetTime - DateTimeOffset.Now).TotalDays));
-
-                return new UsageSnapshot
-                {
-                    Available = true,
-                    RemainingPercent = remainingPercent,
-                    RemainingDays = remainingDays,
-                    ResetAt = resetTime,
-                    UpdatedAt = DateTimeOffset.Now,
-                    Error = null
-                };
+                return CreateSnapshotFromRateLimitBucket(bucket);
             }
             catch (Exception exception)
             {
                 return new UsageSnapshot
                 {
-                    Available = false,
                     UpdatedAt = DateTimeOffset.Now,
                     Error = exception.Message
                 };
@@ -529,6 +749,79 @@ namespace CodexUsageBubble
                     process.Dispose();
                 }
             }
+        }
+
+        private static UsageSnapshot CreateSnapshotFromRateLimitBucket(Dictionary<string, object> bucket)
+        {
+            UsageSnapshot result = new UsageSnapshot
+            {
+                UpdatedAt = DateTimeOffset.Now,
+                Error = null
+            };
+
+            foreach (string key in new[] { "primary", "secondary" })
+            {
+                object windowObject;
+                if (!bucket.TryGetValue(key, out windowObject) || windowObject == null)
+                {
+                    continue;
+                }
+
+                Dictionary<string, object> window = windowObject as Dictionary<string, object>;
+                if (window == null)
+                {
+                    continue;
+                }
+
+                object minutesObject;
+                if (!window.TryGetValue("windowDurationMins", out minutesObject) || minutesObject == null)
+                {
+                    continue;
+                }
+
+                double durationMinutes = Convert.ToDouble(minutesObject, CultureInfo.InvariantCulture);
+                UsageWindowSnapshot parsedWindow;
+                try
+                {
+                    parsedWindow = ParseUsageWindow(window);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (Math.Abs(durationMinutes - 300d) <= 1d)
+                {
+                    result.FiveHour = parsedWindow;
+                }
+                else if (Math.Abs(durationMinutes - 10080d) <= 1d)
+                {
+                    result.Weekly = parsedWindow;
+                }
+            }
+
+            if (!result.FiveHour.Available && !result.Weekly.Available)
+            {
+                throw new InvalidOperationException("The account did not return a 5-hour or seven-day usage window.");
+            }
+
+            return result;
+        }
+
+        private static UsageWindowSnapshot ParseUsageWindow(Dictionary<string, object> window)
+        {
+            double usedPercent = Convert.ToDouble(window["usedPercent"], CultureInfo.InvariantCulture);
+            int remainingPercent = (int)Math.Max(0d, Math.Min(100d, Math.Round(100d - usedPercent)));
+            long resetsAt = Convert.ToInt64(window["resetsAt"], CultureInfo.InvariantCulture);
+            DateTimeOffset resetTime = DateTimeOffset.FromUnixTimeSeconds(resetsAt).ToLocalTime();
+            int remainingDays = (int)Math.Max(0d, Math.Ceiling((resetTime - DateTimeOffset.Now).TotalDays));
+            return new UsageWindowSnapshot
+            {
+                Available = true,
+                RemainingPercent = remainingPercent,
+                RemainingDays = remainingDays,
+                ResetAt = resetTime
+            };
         }
 
         private static string FindCodexExecutable()
@@ -642,6 +935,7 @@ namespace CodexUsageBubble
             try
             {
                 JavaScriptSerializer json = new JavaScriptSerializer();
+                bool available = snapshot.FiveHour.Available || snapshot.Weekly.Available;
                 Dictionary<string, object> status = new Dictionary<string, object>
                 {
                     { "processId", Process.GetCurrentProcess().Id },
@@ -654,10 +948,15 @@ namespace CodexUsageBubble
                     { "top", Top },
                     { "width", Width },
                     { "height", Height },
-                    { "available", snapshot.Available },
-                    { "remainingPercent", snapshot.Available ? (object)snapshot.RemainingPercent : null },
-                    { "remainingDays", snapshot.Available ? (object)snapshot.RemainingDays : null },
-                    { "resetsAt", snapshot.Available ? (object)snapshot.ResetAt.ToString("o") : null },
+                    { "available", available },
+                    { "selectedWindow", selectedWindow == UsageWindowKind.FiveHour ? "fiveHour" : "weekly" },
+                    { "hiddenToTray", !Visible },
+                    { "trayIconVisible", trayIcon != null && trayIcon.Visible },
+                    { "remainingPercent", snapshot.Weekly.Available ? (object)snapshot.Weekly.RemainingPercent : null },
+                    { "remainingDays", snapshot.Weekly.Available ? (object)snapshot.Weekly.RemainingDays : null },
+                    { "resetsAt", snapshot.Weekly.Available ? (object)snapshot.Weekly.ResetAt.ToString("o") : null },
+                    { "fiveHour", CreateWindowStatus(snapshot.FiveHour, false) },
+                    { "weekly", CreateWindowStatus(snapshot.Weekly, true) },
                     { "updatedAt", snapshot.UpdatedAt.ToString("o") },
                     { "error", snapshot.Error }
                 };
@@ -666,6 +965,21 @@ namespace CodexUsageBubble
             catch
             {
             }
+        }
+
+        private static Dictionary<string, object> CreateWindowStatus(UsageWindowSnapshot window, bool includeRemainingDays)
+        {
+            Dictionary<string, object> result = new Dictionary<string, object>
+            {
+                { "available", window.Available },
+                { "remainingPercent", window.Available ? (object)window.RemainingPercent : null },
+                { "resetsAt", window.Available ? (object)window.ResetAt.ToString("o") : null }
+            };
+            if (includeRemainingDays)
+            {
+                result.Add("remainingDays", window.Available ? (object)window.RemainingDays : null);
+            }
+            return result;
         }
     }
 
@@ -679,7 +993,7 @@ namespace CodexUsageBubble
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                using (UsageBubbleForm previewForm = new UsageBubbleForm())
+                using (UsageBubbleForm previewForm = new UsageBubbleForm(false))
                 {
                     previewForm.RenderSample(arguments[2]);
                 }

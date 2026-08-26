@@ -1,11 +1,11 @@
 ---
 name: manage-codex-usage-bubble
-description: Install, start, stop, inspect, or uninstall the Codex weekly usage bubble on Windows. Use when the user asks to manage this plugin's desktop bubble; do not use for general Codex billing or subscription questions.
+description: Install, start, stop, inspect, or uninstall the Codex 5-hour and weekly usage bubble on Windows. Use when the user asks to manage this plugin's desktop bubble; do not use for general Codex billing or subscription questions.
 ---
 
 # Manage Codex Usage Bubble
 
-This plugin ships a signed-in-user Windows utility that shows the Codex seven-day usage window as a draggable, always-on-top glossy bubble.
+This plugin ships a signed-in-user Windows utility that shows the Codex five-hour and seven-day usage windows as a draggable, always-on-top glossy bubble. Click the bubble to switch windows, or hide and restore it through the Windows system tray.
 
 ## Boundaries
 
@@ -29,7 +29,7 @@ Run scripts with Windows PowerShell using `-NoProfile -ExecutionPolicy Bypass -F
 After installing or starting, verify all of the following:
 
 1. `CodexUsageBubble` is running.
-2. `%LOCALAPPDATA%\CodexUsageBubble\codex-weekly-usage-bubble.status.json` reports `isVisible: true`, `topmost: true`, and `available: true`.
+2. `%LOCALAPPDATA%\CodexUsageBubble\codex-weekly-usage-bubble.status.json` reports `isVisible: true`, `showInTaskbar: false`, `topmost: true`, `available: true`, and both `fiveHour.available: true` and `weekly.available: true`.
 3. The `CodexUsageBubble` Run value points to `%LOCALAPPDATA%\CodexUsageBubble\CodexUsageBubble.exe`.
 
-If `available` is false, report the status file's `error`. The executable discovers Codex through `CODEX_CLI_PATH`, `PATH`, or the newest VS Code `openai.chatgpt-*` extension.
+If `available` is false, report the status file's `error`. If only one nested window is unavailable, report that partial state while confirming the available window still works. The executable discovers Codex through `CODEX_CLI_PATH`, the local Codex Desktop runtime, `PATH`, or the newest VS Code `openai.chatgpt-*` extension.
